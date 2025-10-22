@@ -1,0 +1,9 @@
+allocator,baseline,baseline_hit1,capacity,delta_hit1,manager_hit1,manager_variant,queries,seed,window_size
+BestFitAllocator,sliding,0.94,4096.0,0.0,0.94,ttl_mark,100.0,0.0,60.0
+BestFitAllocator,reservoir,0.76,4096.0,0.18,0.94,ttl_mark,100.0,0.0,60.0
+BestFitAllocator,sliding,0.94,4096.0,0.0,0.94,ttl_mark_gen,100.0,0.0,60.0
+BestFitAllocator,reservoir,0.81,4096.0,0.13,0.94,ttl_mark_gen,100.0,0.0,60.0
+BestFitAllocator,sliding,0.94,8192.0,0.0,0.94,ttl_mark,100.0,0.0,60.0
+BestFitAllocator,reservoir,0.83,8192.0,0.11,0.94,ttl_mark,100.0,0.0,60.0
+BestFitAllocator,sliding,0.94,8192.0,0.0,0.94,ttl_mark_gen,100.0,0.0,60.0
+BestFitAllocator,reservoir,0.73,8192.0,0.21,0.94,ttl_mark_gen,100.0,0.0,60.0

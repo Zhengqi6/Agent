@@ -1,0 +1,5 @@
+cold_hits,cold_items,demotion_failures,demotions,fragmentation,heap_capacity,heap_free,heap_used,hit_at_1,hot_hits,hot_lru_size,objects,page_evictions,page_faults,pinned,promotion_failures,promotions,queries,roots,seed,steps,variant
+,,,,0.0,8192,3177,5015,1.0,,,29,,,0,,,54.0,0,0.0,600.0,baseline
+0.0,547.0,0.0,547.0,0.7510729613733905,4096,1165,2931,1.0,54.0,17.0,17,344.0,600.0,0,0.0,0.0,54.0,0,0.0,600.0,tiered
+,,,,0.0,8192,3729,4463,1.0,,,26,,,0,,,51.0,0,1.0,600.0,baseline
+0.0,570.0,0.0,570.0,0.0,4096,2023,2073,1.0,51.0,30.0,12,344.0,600.0,0,0.0,0.0,51.0,0,1.0,600.0,tiered

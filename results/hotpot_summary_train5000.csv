@@ -1,0 +1,8 @@
+metric,value
+manager_hit@1,0.4384
+manager_hit@3,0.6804
+manager_hit@5,0.7984
+sliding_hit@1,0.3738
+sliding_hit@3,0.5366
+sliding_hit@5,0.6014
+queries,5000.0
