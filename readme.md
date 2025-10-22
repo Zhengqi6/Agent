@@ -1,82 +1,90 @@
-新型通用 LLM Agent Memory 系统设计
-背景与设计目标
-大型语言模型（LLM）作为智能Agent的大脑，仍面临上下文长度有限、推理效率不足、长/短期记忆无法兼顾等挑战[1][2]。为此，我们设计一套新型的Agent Memory 系统，以全面提升LLM Agent的记忆与推理能力。主要目标包括：
-超长上下文处理（百万级 token）：支持代理读写百万级别的长文本或多轮对话，在不改变模型架构的情况下突破Transformer上下文窗口长度的限制[3][4]。
-推理效率提高：避免每次生成都处理大量无关上下文，加快推理速度。通过分段处理+记忆策略，实现线性时间复杂度的长文本推理[5][6]。
-计算资源成本降低：Memory模块设计保证推理计算随文本长度线性增长，避免了$O(N^2)$的注意力开销[6]。支持将长任务拆解为可并行/流水的子任务，充分利用多核和分布式资源。
-记忆的可控与可解释：提供对记忆内容与更新过程的精细控制，允许开发者调试、追踪Agent的记忆状态，并通过自省(reflection)机制让Agent能审视并优化自己的记忆管理。
-以上目标的实现，将借鉴经典计算机系统的设计理念（操作系统虚拟内存、多级缓存、数据库事务/索引、编译器优化等），并融合最新的AI记忆模型研究成果。
-系统架构概览
-图1：新型 LLM Agent Memory 系统架构概览。 该架构采用分层记忆模块和动态记忆管理策略。LLM主体（大模型）通过短期记忆模块与长期记忆库交互，实现对超长输入的分段处理和关键信息的持续积累。Memory Manager作为中枢控制单元，负责记忆的读取、写入和置换决策，确保在有限的上下文窗口内高效存取所需信息。整个流程如下：
-1.分段输入处理：对于超长输入，Agent并非一次性读完整个内容，而是将其视为一系列连续片段[7]。LLM每次只接收“当前片段 + 上一步的记忆摘要”两个部分[7]，类似处理流式证据的方式。这样每一步模型只需关注固定大小的上下文（片段长度 + 固定记忆长度），避免了长文本带来的注意力计算爆炸[6]。
-2.记忆更新（写）：在处理每个片段后，LLM会主动更新内部的辅助记忆面板，用新的关键信息覆写旧记忆[8][6]。这种覆盖写策略使得记忆长度始终固定，不随处理的总文本长度增长，从而确保计算开销与文本长度线性关系[6]。更新策略由Memory Manager控制，它可以参考人类记笔记的习惯——提炼要点，丢弃冗余[9]。通过强化学习（或启发式算法），系统学会保留将来有用的信息，丢弃干扰项[6]（类似编译器的死码删除，将无用上下文排除在后续计算之外）。
-3.记忆检索（读）：当LLM处理新问题或进入推理新阶段时，Memory Manager根据当前任务需求，从长期记忆库中检索相关信息并加载到短期记忆模块中（如同操作系统将所需页面调入内存）[10][11]。长期记忆库通过索引和向量检索机制，快速定位相关知识片段或过去对话摘要，相当于数据库的索引查询。Memory Manager采用类操作系统的页面置换算法，确保短期记忆中始终存放最有用的内容：例如近来最常用或重要的信息优先留存，很久未被访问的记忆若空间不足则被换出（对应LRU等策略），或者结合艾宾浩斯遗忘曲线设定的内容老化权重来决定淘汰顺序[12][13]。
-4.最终决策生成：在处理完整个输入片段序列后，LLM结合最终的记忆状态来生成答案或执行决策[14]。由于记忆模块已经在推理过程中聚合了关键信息，最终生成时模型仅需关注这些摘要而非原始海量细节，从而保证速度和准确率[8][15]。这种“局部处理+全局融合”的工作流程，使模型在长程推理时既不遗漏关键上下文，又避免了重复处理全部历史内容[14]。
-整个架构类似于多级存储器层次结构：短期记忆=高速缓存，长期记忆=主存/硬盘，LLM上下文窗=寄存器/物理内存。Memory Manager扮演操作系统内存管理单元的角色，在不同层级之间调度信息，如同处理器的缓存一致性协议，确保各层记忆内容的一致和正确更新。
-关键设计与机制
-1. 多层次记忆架构与虚拟内存机制
-短期记忆（STM） vs 长期记忆（LTM）：借鉴认知和系统架构，Agent Memory分为短期和长期两类[16][17]。短期记忆是容量有限但访问快速的区域，用于存放当前对话或当前任务高度相关的信息，类似CPU的L1/L2缓存或寄存器[18]。长期记忆则容量庞大（可千万级token），用于存储长期知识、经验和上下文历史，类似主存或硬盘[18]。在本设计中：
-短期记忆以embedding token序列形式直接嵌入LLM的上下文窗口内[7][19]。例如在每轮推理时，将上一轮存储的记忆tokens放入prompt的开头或特定位置，让模型将其视为“额外上下文”。这实际上充当了虚拟上下文扩展：模型自认为有很大上下文（虚拟地址空间），但实际上物理上下文很有限，每次只载入当前需要的一页内容[10][11]。
-长期记忆由外部存储（如向量数据库、参数化Memory模块等）实现，存储形式可以是结构化知识表、文本日志或记忆embedding等。它在Agent闲置或需要检索时才访问，相当于把不活跃的信息“分页”存放在外部[10]。长期记忆通过索引支持按需提取：Memory Manager根据查询语境，检索出若干相关Memory条目，将它们编排后注入短期记忆供模型使用。
-这种层次化架构结合虚拟内存思想，使LLM Agent拥有一个逻辑上远大于实际物理上下文窗口的记忆空间[10][11]。当模型需要访问某段不在当前上下文的内容时，Memory Manager会触发“缺页中断”式的过程：先腾出空间保存当前记忆状态到长期库，再从长期库中取回所需内容到短期记忆（类似OS将不在内存的页换入）[10]。整个过程对LLM来说透明——LLM始终在固定大小的上下文上运行，而Memory系统在背后动态换入换出数据。这允许模型处理任意长度的信息，只要分段逐步读写即可[7][19]。
-同时，引入多级缓存思想：除了STM/LTM两级，还可以有中期缓存（MTM）作为中间层。例如最近几轮对话摘要可以放在一个中等容量的缓冲区，命中率更高时直接供STM使用，降低频繁访问慢速LTM的开销。多个级别缓存需要解决一致性问题：Memory Manager采用写通(write-through)策略或带有版本控制的更新机制，确保短期记忆的更改正确反映到长期存储（类似缓存一致性协议，防止不同层出现旧数据）。
-2. 动态记忆管理与页面置换算法
-记忆写入策略：每当LLM处理完一段新的信息后，会将其压缩存储到记忆中。MemAgent提出的覆盖式记忆更新是我们写入策略的核心[8][6]：新的记忆内容会覆盖旧有内容（全部或部分），使得记忆容量保持恒定。这类似操作系统的页面替换，但区别在于MemAgent通过强化学习学习覆盖策略[6]。我们将这种方法拓展为：Memory Manager基于奖励机制决定保留哪些信息进入记忆。具体来说：
-将保留关键要点视为正奖励，对应保留下来的信息在后续最终回答中确有用处[6]。
-将丢弃冗余信息视为正奖励，如果某信息在后续未被用到却占据了记忆则视为浪费（相当于“占用宝贵内存却无贡献”），因此及时淘汰获得更高收益[6]。
-通过多轮任务的强化学习（如策略梯度或DAPO算法[4][6]），模型自动学会压缩摘要技巧：[20]指出MemAgent在推理时每步只提取关键信息做笔记，而不试图记住所有细节[9]。这有效降低了“记忆噪音”，提高后续推理准确率和效率。
-页面置换算法：当短期记忆空间不足，需要从LTM换入新内容时，就涉及置换决策。我们融合经典算法和智能策略，包括：
-LRU（最近最少使用）：淘汰最长时间没用过的记忆项，假设近期使用的很可能很快再次用到（时间局部性）。
-LFU（最少使用频率）：淘汰使用频率最低的项，保持高频知识常驻内存（频率局部性）。
-基于遗忘曲线的衰减：对每条记忆维护一个“遗忘分数”，随着时间指数衰减，如果长期未被访问则分数降低加速淘汰[12]。这类似艾宾浩斯遗忘曲线，用认知规律指导置换——SAGE框架正是这样动态调整短期和长期记忆的内容[13]。
-基于内容重要度：通过Agent的反思模块评估每段记忆对当前任务的相关性，重要度低的优先淘汰。这有点类似编译器的死代码删除：移除对最终输出无影响的内容，以减轻负担。
-Memory Manager可以将上述策略结合，例如综合考虑上次访问时间、访问频率和任务相关评分来计算一个置换优先级。为了避免抖动和确保关键信息不被过早淘汰，我们可引入缓存锁定或衰减重置机制：某些被判定为关键的记忆在一段时间内即使未访问，其遗忘分数也缓慢衰减甚至锁定（类似重要页面锁定在内存，不被换出）。同时，每当Agent使用某条记忆，我们可以小幅提升其重要度评分（类似LFU/LRU更新），实现自适应的记忆维护。
-3. 记忆内容的表示与集成
-内嵌式记忆 tokens：为保证记忆与模型推理的无缝融合，我们采用MemGen提出的“生成式潜在记忆”思路[21]。具体而言，记忆模块产出的内容被表示为特殊的latent embedding序列，这些记忆token和普通文本token一样参与Transformer的计算[7][19]。如图1所示，Memory实际上是上下文窗内的一部分[7]——这样模型在生成时能够直接访问记忆信息，而不需要额外的检索调用开销。MemGen通过Memory Weaver模块，在需要记忆时动态生成一段latent向量并前置/插入到模型隐状态中，使模型后续生成条件在这段记忆上[22][23]。这一机制细粒度地织入了记忆与推理过程，确保推理过程中每一步都可及时“想起”相关知识[21]。
-反射性存储与检索：SAGE等框架表明，引入反思（reflection）机制可以大幅提升Agent对自身知识的利用和调整能力[24][25]。在本系统中，我们增加一个反思模块（可看作Agent的元认知组件）。它定期或在关键节点审阅当前对话/任务的整体情况，并产生自我反馈：
-当发现知识缺口时，触发Memory Manager从长期记忆或外部知识库检索相关信息填补短期记忆（类似人回忆起久违的往事或查阅资料）。
-当检测到记忆中某些内容可能不再可信或相关时，将其标记为过期，必要时从长期记忆中移除（模拟记忆重构与遗忘）。这种“记忆审查”有助于避免模型因旧信息干扰而产生错误答案。
-反思模块还能根据当前任务需求，对记忆内容进行改写或重组织（类似数据库中的视图机制），例如为当前问题动态生成一个相关记忆的汇总视图，提供给模型参考，而无需改动底层记忆库。
-通过反思与自我监控，Agent实现了记忆的自适应进化：不断调整其知识存储策略，以适应新任务和新环境[26][25]。这一点对于长期运行的自治Agent尤为关键——它能自主“整理大脑”，保持重要记忆鲜活、清理陈旧信息，从而在复杂多变的任务中保持高效。
-4. 知识分层组织与预训练融合
-常识 vs 长尾知识分层：考虑到LLM往往包含大量通用常识，但对于长尾专业知识却难以兼顾，我们借鉴Hierarchical Memory Pretraining的思想，将知识分层存储[27]。具体方案是：
-基础模型权重中蕴含通用常识和基本推理能力（类似人类大脑中的常识记忆）。这部分通过常规LLM预训练习得，相当于一个小型但精通常识的语言模型[27]。
-外部记忆库中存放长尾的、领域专用的知识[28][27]。这些知识以参数矩阵（Memory Bank）或数据库形式存在，可被按需调入使用。我们在模型预训练阶段就引入此结构，让模型学会将罕见知识存储在Memory Bank中[27]。训练过程相当于让模型同时优化自身权重（记忆常识）和Memory Bank内容（记忆长尾知识）。
-通过这种分层，小模型 + 大记忆库可以达到大模型近似的知识覆盖却更高效[29]。例如，一款只有数亿参数的LLM配合数十亿参数的Memory Bank，就能在推理时按需获取长尾知识，性能媲美上百亿参数的单一模型[29]。更重要的是，由于长尾知识存取是按需的，不会每次推理都全部激活，所以推理成本大幅降低。而未被主动检索的长尾知识对模型输出没有影响，也就避免了灾难性遗忘——模型在学习新任务时不必覆盖掉旧有长尾知识，只需往Memory Bank中添加或调整对应条目即可。这类似数据库的可扩展性：向知识库添加新知识不会破坏已有知识的完备性，因为查询时仍可获取旧知识。
-事务和日志：受数据库事务日志机制启发，我们为Memory系统的更新引入日志记录。每当Agent产生新的重要信息（例如得出一个中间结论、用户提供了新事实等），Memory Manager会将这次更新作为一个事务写入日志，包括变更的内容、时间、上下文等。这样有多重好处：
-调试与可追溯：开发者可检查日志了解Agent记忆的演变，定位某错误回答是否由于某次记忆更新不当引起，并能将Memory回滚到某状态以重现问题场景。
-多Agent一致性：如果多个Agent共享部分长期记忆（例如协作写作场景），日志可用于同步各Agent的记忆更新，确保他们看到的一致（类似分布式系统的WAL和复制日志，用于一致性）。
-反思优化：Agent自己也可以遍历日志，进行元学习。例如识别哪些记忆更新之后绩效提高了，哪些无效或有害，从而在未来调整记忆策略（类似基于日志的反馈优化）。
-日志结合检查点机制，可定期将Memory全量快照保存，并清理过老的日志记录。必要时，可用日志和检查点恢复特定历史记忆状态，实现时间旅行调试。
-5. 记忆可控性与可解释性
-为让人类和Agent自己都能“看懂”记忆，我们在设计中加入多项增强可解释的举措：
-自然语言存储：记忆中的许多条目以可读文本形式存储（或至少可以被转述为文本）。例如，Agent的长期记忆库可以用JSON或Markdown文件记录知识，使开发者可直接查看和编辑。这类似一些研究把信息存为自然语言以提高可解释性[30]。当Agent提取这类记忆时，也可以直接向用户解释“我记得…因为…”，提升透明度。
-记忆标签与分组：为不同类型的记忆加标签（如“事实知识”、“任务经验”、“规划意图”等）。MemGen 的实验显示，无需显式监督，Agent内部会涌现出规划记忆、程序记忆、工作记忆等不同用途的记忆模块[31]。我们可以顺应这种涌现，将Memory结构化：规划类记忆专门用于高层任务计划，程序类记忆存工具使用方法，工作记忆则对应当前步骤的数据。[32]的分析指出，不同latent记忆簇分别支持高层策略、工具使用等功能。这种结构让人类一目了然Agent的思路：例如看到“计划记忆”区存的是任务清单，“程序记忆”列的是API使用示例，可辅助判断Agent行为是否正确。
-接口控制：提供交互接口允许手动干预记忆。开发者或用户可以通过API/工具指令，要求Agent“忘记”某段对话、锁定某关键事实不被遗忘，或插入一段外部提示到记忆中。接口层会通知Memory Manager执行对应操作。这种可控性确保在关键任务中，人类有最终决定权来调整Agent记忆状态，提高可靠性（如清除不恰当记忆避免错误决策）。
-最后，通过可视化界面，我们可以实时监控Agent的记忆变化——比如以图表展示短期记忆的利用率、以时间线展示记忆内容更新等。这相当于给AI装上“脑电图”，方便在实际应用中洞察其内部工作原理。
-结合前沿研究的综合优势
-综合以上设计，我们的Agent Memory系统体现出多项突破，这些恰与近期研究成果不谋而合：
-无限长上下文与线性复杂度：借助MemAgent的片段+记忆模式[7][6]和强化学习优化，代理可以在不牺牲性能前提下处理百万token级输入，真正实现O(N)级扩展能力[6][33]。
-短长期记忆协同：SAGE框架强调了短期与长期记忆结合的重要性[16][17]。我们的系统通过虚拟内存式的STM/LTM架构，实现了工作记忆与长期知识的动态配合，并用遗忘曲线等机制保证短期记忆轻装上阵、长期记忆博闻强识[12][13]。
-记忆嵌入推理过程：MemGen证明了内生的latent记忆令推理与记忆水乳交融[21]。我们通过embedding记忆token和Memory Weaver策略，让LLM将记忆视作自身一部分进行推理，获得了更高的推理准确率和跨任务泛化能力[21][34]。实验表明，这种方法还能自发形成类似人类的记忆分类，赋予Agent更自然的认知形态[31]。
-分层知识库降低遗忘：Hierarchical Memory Pretraining展示的小模型+大记忆的范式，被我们用于工程实现：核心LLM只需掌握共性知识，而大量个性化/长尾知识存于可扩展的记忆库[28][27]。这不仅减少了部署成本（边缘设备也可承载），还确保在持续学习新知识时旧知识不被覆写，从根本上缓解了灾难性遗忘问题。
-结语
-本设计提供了一套面向未来的LLM Agent记忆系统蓝图，将操作系统、处理器、数据库、编译器的经典原理与最新AI记忆机制融会贯通。通过记忆层次化、动态管理、内嵌融合等方案，Agent将获得近乎无限的“思维缓冲区”和自主整理记忆的能力，在超长文本理解、复杂推理、多任务连续对话等场景中表现出卓越的上下文掌控力和推理效率。
-值得注意的是，该系统在注重技术先进性的同时亦考虑了工程可行性：各模块可基于现有LLM架构和数据库技术逐步实现，并且具备良好的扩展性，能够随着模型能力提升不断演化。例如，随着更强的反思Agent出现，我们的Memory Manager策略还能通过强化学习不断自我改进；又如存储硬件的发展将允许更快的记忆检索，进一步降低延迟。总之，新型Agent Memory系统为构建更聪明、更持久、更可信赖的通用AI代理奠定了关键基础，在未来的实际部署中将大放异彩。
-参考文献：
-1.Hongli Yu, et al. “MemAgent: Reshaping Long-Context LLM with Multi-Conv RL-based Memory Agent.” arXiv preprint, 2025[35][7].
-2.Can Peng, et al. “Self-evolving Agents with Reflective and Memory-augmented Abilities (SAGE).” arXiv preprint, 2024[24][36].
-3.Guibin Zhang, et al. “MemGen: Weaving Generative Latent Memory for Self-Evolving Agents.” arXiv preprint, 2025[21][31].
-4.Hadi Pouransari, et al. “Pretraining with Hierarchical Memories: Separating Long-tail and Common Knowledge.” arXiv preprint, 2025[28][27].
+# MemorySpace: Systems-Inspired Memory Manager for LLM Agents
 
-### 系统级特性小结
-- **GC 调度插件**：支持 `PeriodicGCPolicy`、`AdaptiveFragmentationPolicy`、`ObjectGrowthPolicy`，GC 事件记录 `pause_duration` 供性能分析。
-- **策略自适应**：`BanditGCPolicy` 使用 epsilon-greedy 在多策略间自适应选择 GC 触发逻辑。
-- **线程安全模式**：`MemoryManager(thread_safe=True)` 启用读写锁，多读单写，为后续并发 GC / 快照实验提供基础。
-- **分页策略扩展**：`PageTable` 支持 LRU / Clock / LFU，记录 `page_faults`、`page_evictions`、`writes`，便于评估不同置换对命中率和 GC 压力的影响。
-- **WAL / Checkpoint**：`WriteAheadLog` 在 store/free 时追加日志，`CheckpointManager` 可序列化当前对象状态，支持崩溃恢复与一致性分析。
-- **Tiered 管理器参数化**：`--paging-strategy lru|clock|lfu`、`--write-policy write_back|write_through`、`--promotion-batch N` 帮助分析不同策略对命中率、GC 停顿、写放大等系统指标的影响。
-- **任务级基准（HotpotQA）**：`experiments.hotpot_benchmark` 使用 HuggingFace `datasets` 加载 HotpotQA，比较 MemoryManager 与 Sliding Window 在支持事实召回上的表现（需安装 `datasets`、`numpy`、`pyarrow` 等依赖）。运行示例：
+MemorySpace 将经典计算机系统（操作系统内存管理、缓存分层、数据库日志等）的思想引入 Agent 外部记忆，使得 LLM Agent 在处理长上下文与连续任务时，拥有可控、可观测、可持久化的记忆栈。
+
+核心目标：
+- **系统化管理**：提供真实的堆分配、垃圾回收、热/冷分层、分页置换与写回策略，而非简单的“向量库 + 时间衰减”。
+- **可观测 & 可恢复**：通过 MemoryProfiler、WAL、Checkpoint，让每一次存储/回收都有迹可循，可以复现与回滚。
+- **任务级验证**：在长文本阈值（text8/enwik8）与 HotpotQA supporting-fact 召回等任务中展示系统效益，并保留脚本一键复现。
+
+---
+
+## 功能速览
+
+| 模块 | 亮点 |
+| --- | --- |
+| **MemoryManager** | First/Best-Fit 分配；TTL / Mark-Sweep / Generational GC；策略插件（周期/碎片率/对象增长）；BanditGCPolicy epsilon-greedy 自适应。 |
+| **TieredMemoryManager** | 热层 MemorySpace + 冷层 ColdStorage；LRU/Clock/LFU 分页；write-back/write-through；批量升温；热/冷命中率与页面统计。 |
+| **Persistence** | WriteAheadLog 记录 store/free；CheckpointManager 快照；可选读写锁支持多读单写。 |
+| **Retrieval & Baseline** | SimilarityRetriever（稀疏 + Sentence-Transformer 稠密）；SlidingWindow、Reservoir 作为对照。 |
+| **Instrumentation** | MemoryProfiler 输出 JSONL/CSV（分配、检索、GC 事件含 `pause_duration`）；`scripts/run_all.sh` 集成单测、text8、HotpotQA 实验。 |
+
+---
+
+## 仓库结构
+
+```
+├── data/                # 示例数据（text8/enwik8/tinyshakespeare/ufo 等）
+├── docs/                # 论文草稿、项目日志、代码总览
+├── results/             # 实验输出 CSV
+├── scripts/             # 运行脚本（run_all.sh）
+├── src/
+│   ├── agent_memory/    # MemorySpace 核心实现
+│   ├── datasets/        # 数据加载工具
+│   └── experiments/     # 实验脚本（capacity_sweep、hotpot_benchmark 等）
+└── tests/               # 单元测试
+```
+
+> ⚠️ `data/enwik8` 与 `data/text8` 约 95 MB，已包含在仓库中。若仓库体积敏感，可删除后使用脚本重新下载。
+
+---
+
+## 安装依赖
+
+建议使用 Python 3.11，并创建虚拟环境：
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install numpy==1.26.4 datasets==2.14.6 sentence-transformers pyarrow==16.0.0
+```
+
+部分脚本（例如 `hotpot_benchmark`）会访问 HuggingFace Hub，如遇网络限制请提前配置令牌或使用镜像。
+
+---
+
+## 快速开始
+
+### 1. 运行单测与核心实验
+
+```bash
+chmod +x scripts/run_all.sh
+./scripts/run_all.sh
+```
+
+该脚本会执行：
+1. `PYTHONPATH=src python -m unittest discover -s tests`
+2. text8 容量扫描（输出 `results/text8_capacity_sparse.csv`）
+3. HotpotQA train[:200] supporting-fact 召回（`results/hotpot_summary.csv`）
+
+### 2. 关键实验命令
+
+- **长文本容量（text8/enwik8）**
+  ```bash
+  PYTHONPATH=src python -m experiments.capacity_sweep \
+    --data-path data/text8 \
+    --chunk-size 512 \
+    --limit 80000 \
+    --capacities 4096 8192 \
+    --query-interval 10 \
+    --baselines sliding reservoir \
+    --collector-variants ttl_mark ttl_mark_gen \
+    --seeds 1 \
+    --output results/text8_capacity_sparse.csv
+  ```
+
+- **HotpotQA 任务级基准（5k 样本）**
   ```bash
   PYTHONPATH=src python -m experiments.hotpot_benchmark \
     --dataset-split train[:5000] \
@@ -85,21 +93,67 @@ Memory Manager可以将上述策略结合，例如综合考虑上次访问时间
     --sliding-window 4096 \
     --output results/hotpot_summary_train5000.csv
   ```
-- **大规模文本实验**：可下载 `enwik8`（约 95 MB），运行 `experiments.capacity_sweep`（示例参数与命令见 `docs/project_log.md`），评估 MemorySpace 在大规模文本块下的命中率与 GC/分页统计。
 
-[1] [2] [12] [13] [16] [17] [24] [25] [26] [30] [36] Self-evolving Agents with reflective and memory-augmented abilities
-https://arxiv.org/html/2409.00872v1
-[3] [5] [8] [14] MemAgent: Reshaping Long-Context LLM with Multi-Conv RL based Memory Agent
-https://memagent-sialab.github.io/
-[4] [6] [7] [9] [15] [19] [20] [33] [35] [2507.02259] MemAgent: Reshaping Long-Context LLM with Multi-Conv RL-based Memory Agent
-https://ar5iv.labs.arxiv.org/html/2507.02259
-[10] [11] How to Setup Memory in an LLM Agent | by Kerem Aydın | Medium
-https://medium.com/@aydinKerem/how-to-setup-memory-in-an-llm-agent-3efdc5d56169
-[18] Building Long-Term Memory in Agentic AI - Level Up Coding
-https://levelup.gitconnected.com/building-long-term-memory-in-agentic-ai-2941b0cca3bf
-[21] [22] [23] [32] [Papierüberprüfung] MemGen: Weaving Generative Latent Memory for Self-Evolving Agents
-https://www.themoonlight.io/de/review/memgen-weaving-generative-latent-memory-for-self-evolving-agents
-[27] [28] [29] [2510.02375] Pretraining with hierarchical memories: separating long-tail and common knowledge
-https://www.arxiv.org/abs/2510.02375
-[31] [34] [2509.24704] MemGen: Weaving Generative Latent Memory for Self-Evolving Agents
-https://arxiv.org/abs/2509.24704
+- **分层记忆 & 分页策略**
+  ```bash
+  PYTHONPATH=src python -m experiments.tiered_benchmark \
+    --data-path data/ufo.csv \
+    --limit 2000 \
+    --query-interval 15 \
+    --fragmentation-threshold 0.4 \
+    --root-capacity 10 \
+    --paging-strategy lfu \
+    --write-policy write_back \
+    --promotion-batch 2 \
+    --output results/tiered_summary.csv
+  ```
+
+更多实验（GC ablation、长上下文模拟等）请参考 `src/experiments/` 内脚本。
+
+---
+
+## 核心模块一览
+
+- `src/agent_memory/memory_manager.py`
+  - 负责对象分配、引用管理、GC 调度、WAL/Checkpoint、线程安全。
+- `src/agent_memory/gc_policy.py`
+  - 定义 `GCPolicy` 接口及 BanditGCPolicy；可插拔策略。
+- `src/agent_memory/tiered_manager.py`
+  - 实现热/冷两级存储、分页策略、批量升温与指标导出。
+- `src/agent_memory/pager.py`
+  - LRU/Clock/LFU 页面置换，实现 `page_faults/evictions/writes` 统计。
+- `src/experiments/*`
+  - 各类实验脚本，统一输出 CSV，方便绘图分析。
+
+单元测试位于 `tests/`，覆盖 MemoryManager、TieredManager、Pager、WAL、GC 策略等关键组件。
+
+---
+
+## 当前实验结果概览
+
+| 实验 | 主要设置 | 指标亮点 |
+| --- | --- | --- |
+| text8 容量扫描 | 80k × 512B，GC=TTL+Mark | MemoryManager hit@1≈0.97 vs Sliding 0.95；对 Reservoir 提升 0.32–0.40 |
+| enwik8 容量扫描 | 50k × 512B | MemoryManager hit@1≈0.96 vs Sliding 0.94；对 Reservoir 提升 ~0.37 |
+| HotpotQA Supporting-Fact | train[:5000]，top-5 | MemoryManager hit@5=0.798 vs Sliding 0.601 |
+
+所有结果均写入 `results/` 目录，可直接用于画图或统计。
+
+---
+
+## 下一步计划
+
+详见 `docs/project_log.md`，重点包括：
+- 引入百万级对话/跨任务日志，观察高负载 GC/paging 行为；
+- 接入 LangChain、MemGPT 等行业基线；
+- 在长文本 QA/对话任务上输出 F1、EM、Task success 等指标；
+- 进行崩溃恢复与多 Agent 并发压力实验；
+- 结合模型策略（如 LongMem/OMEGA 的 router），探索“模型记忆 + 系统策略”的协同。
+
+---
+
+## 参考
+- LongMem: Directly Optimizing Language Models for Long-Text Tasks (arXiv:2507.02259)
+- OMEGA-Memory: Independent-Context Multi-Conversation Generation for Large Language Model Memory (arXiv:2509.24704)
+
+如有问题或建议，欢迎提交 issue 或 PR。EOF
