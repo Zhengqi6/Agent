@@ -136,6 +136,8 @@ chmod +x scripts/run_all.sh
 | text8 容量扫描 | 80k × 512B，GC=TTL+Mark | MemoryManager hit@1≈0.97 vs Sliding 0.95；对 Reservoir 提升 0.32–0.40 |
 | enwik8 容量扫描 | 50k × 512B | MemoryManager hit@1≈0.96 vs Sliding 0.94；对 Reservoir 提升 ~0.37 |
 | HotpotQA Supporting-Fact | train[:5000]，top-5 | MemoryManager hit@5=0.798 vs Sliding 0.601 |
+| CNN/DailyMail 容量扫描 | train 150k × 512B，window=120 | MemoryManager hit@1=0.831 vs Sliding 0.822；对 Reservoir 提升 0.17–0.27 |
+| UltraChat 多轮对话 | train\_sft 150k × 512B，window=150 | MemoryManager hit@1=0.814 vs Sliding 0.801；对 Reservoir 提升 0.26–0.29 |
 
 所有结果均写入 `results/` 目录，可直接用于画图或统计。
 
@@ -144,11 +146,11 @@ chmod +x scripts/run_all.sh
 ## 下一步计划
 
 详见 `docs/project_log.md`，重点包括：
-- 引入百万级对话/跨任务日志，观察高负载 GC/paging 行为；
-- 接入 LangChain、MemGPT 等行业基线；
-- 在长文本 QA/对话任务上输出 F1、EM、Task success 等指标；
-- 进行崩溃恢复与多 Agent 并发压力实验；
-- 结合模型策略（如 LongMem/OMEGA 的 router），探索“模型记忆 + 系统策略”的协同。
+- **Benchmark parity**：对齐 LongMem、OMEGA-Memory 等最新论文的设定，补充 LongBench、InfiniteBench、NarrativeQA、Qasper、GovReport 等基准，并引入 LangChain VectorStore、MemGPT Planner、MemLab、MemRAG 作为行业 baseline，统一比较命中率、延迟、吞吐；
+- **Data scaling**：扩展至百万级对话/跨任务日志（如 ShareGPT、BookCorpus、LongDialog），并将 MultiDoc2Dial、LongFormSum 等真实任务接入 `experiments/`，同时输出 hit@k + F1/EM；
+- **System stress**：在冷存储与 WAL 上记录写放大、落盘延迟、命中率时序，验证高负载下的可控性；
+- **Policy learning**：基于运行日志构建离线 MDP，用 policy-gradient/DQN 探索 GC 与分页组合策略，保留启发式策略做安全回退；
+- **Documentation refresh**：更新论文草稿的相关工作、实验表格与附录，使 MemorySpace 的系统创新点和性能对比一目了然。
 
 ---
 

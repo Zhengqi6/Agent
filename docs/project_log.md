@@ -20,6 +20,28 @@
 
 ---
 
+## 2025-10-27 Planning Update
+
+- **Benchmark parity**：计划在 LongBench、InfiniteBench、NarrativeQA、Qasper、GovReport 等公开任务上复现 MemorySpace，并加入 LangChain VectorStore、MemGPT Planner、MemLab、MemRAG 等行业 baseline，统一输出命中率、延迟、吞吐三组指标。
+- **Data scaling**：准备引入 ShareGPT、BookCorpus、LongDialog 等百万级日志，扩展 `experiments/` 管线以同时评估 hit@k 与下游 F1/EM/Task success。
+- **System stress**：新增冷存储写放大、WAL 增长、刷盘延迟与热/冷命中率时间序列的观测，支撑高负载下的系统分析。
+- **Policy learning**：基于现有 profiler/WAL 日志构建离线 MDP，探索 policy-gradient 或 DQN 的 GC/分页策略优化，并保留 Bandit/启发式策略作为回退路径。
+- **Documentation refresh**：同步更新 `docs/paper.tex` 的 Related Work 与实验表格，突出 MemorySpace 相比 LongMem、OMEGA-Memory 的系统创新点与性能定位。
+
+---
+
+### 2025-10-27 — CNN/DailyMail Capacity Sweep
+- 从 Hugging Face 下载 `cnn_dailymail` 3.0.0 train split（28.7 万篇新闻），合并正文与摘要写入 `data/cnn_dailymail_articles.txt`。
+- 运行 `PYTHONPATH=src python -m experiments.capacity_sweep --data-path data/cnn_dailymail_articles.txt --limit 150000 --capacities 65536 131072 --collector-variants ttl_mark ttl_mark_gen --baselines sliding reservoir --window-size 120 --query-interval 20`。
+- 结果写入 `results/cnndm_capacity.csv`：MemorySpace 在 hit@1 上对 Sliding 提升 ~0.9pp，对 Reservoir 提升 17–27pp，展示在真实新闻语料上的可扩展性。
+
+### 2025-10-27 — UltraChat Dialogue Sweep
+- 下载 `HuggingFaceH4/ultrachat_200k` train\_sft split（20.8 万段多轮对话），整理为 `data/ultrachat_train_sft.txt`。
+- 运行 `PYTHONPATH=src python -m experiments.capacity_sweep --data-path data/ultrachat_train_sft.txt --limit 150000 --capacities 65536 131072 --collector-variants ttl_mark ttl_mark_gen --baselines sliding reservoir --window-size 150 --query-interval 25`。
+- 结果写入 `results/ultrachat_capacity.csv`：MemorySpace hit@1=0.814，相比 Sliding 提升 ~1.3pp，对 Reservoir（TTL+Mark）提升 26–29pp，验证在多轮对话日志下的检索优势。
+
+---
+
 ## 最新里程碑
 
 ### 2025-10-16 — Prototype Ready
